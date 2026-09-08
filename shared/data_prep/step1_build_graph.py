@@ -48,6 +48,21 @@ CITATION_PREFIX = "https://citekg.org/resource/citation/"
 
 OUT_DIR = Path(".")
 
+# ── Load frozen split (leakage guard) ─────────────────────────────────────────
+# Same guard as step3_encode_external_papers.py: adj_PP is used downstream
+# (step 4) to build feat_PP, a per-paper feature that averages in the
+# embeddings of everything that paper cites. If a corpus paper's val/test
+# citation edges are included, feat_PP for that paper directly leaks the
+# target paper's embedding into its own representation. So adj_PP must only
+# be built from cites edges whose citing paper is in the frozen TRAIN split
+# — exactly mirroring the guard already applied to feat_external_papers.
+print("Loading split_uris.json …")
+with open(OUT_DIR / "split_uris.json") as f:
+    split = json.load(f)
+train_citing_uris: set[str] = set(split["train"])
+print(f"  Train citing_uris: {len(train_citing_uris):,} "
+      f"(val={len(split['val']):,}, test={len(split['test']):,})")
+
 # Namespace prefixes shared by every SPARQL query below
 SPARQL_PREFIXES = """
 PREFIX cito: <http://purl.org/spar/cito/>
@@ -138,21 +153,33 @@ citation_id: dict[str, int] = {uri: i for i, uri in enumerate(citation_list)}
 N_papers    = len(paper_list)
 N_citations = len(citation_list)
 
-# ── adj_PP : paper → cited paper (corpus→any) ────────────────────────────────
-print("Building adj_PP …")
+# ── adj_PP : paper → cited paper (corpus→any), TRAIN-ONLY citing edges ───────
+# Only keep a cites edge s → o if the citing paper s is in the frozen TRAIN
+# split. This mirrors step3's guard on feat_external_papers: adj_PP feeds
+# feat_PP in step 4 (mean embedding of everything a paper cites), so a
+# val/test paper's own citation edges must NOT be used to propagate
+# neighbour features — otherwise feat_PP would leak the eval target's
+# embedding straight into the citing paper's representation.
+print("Building adj_PP (train-only citing edges) …")
 pp_rows, pp_cols = [], []
+n_pp_skipped_not_train = 0
 for s, o in cites_rows:
     s_uri, o_uri = str(s), str(o)
-    if s_uri in paper_id and o_uri in paper_id:
-        pp_rows.append(paper_id[s_uri])
-        pp_cols.append(paper_id[o_uri])
+    if s_uri not in paper_id or o_uri not in paper_id:
+        continue
+    if s_uri not in train_citing_uris:
+        n_pp_skipped_not_train += 1
+        continue
+    pp_rows.append(paper_id[s_uri])
+    pp_cols.append(paper_id[o_uri])
 
 adj_PP = torch.sparse_coo_tensor(
     indices=torch.tensor([pp_rows, pp_cols], dtype=torch.long),
     values=torch.ones(len(pp_rows), dtype=torch.float),
     size=(N_papers, N_papers),
 ).coalesce()
-print(f"  adj_PP : {adj_PP._nnz():,} edges")
+print(f"  adj_PP : {adj_PP._nnz():,} edges "
+      f"(skipped {n_pp_skipped_not_train:,} non-train citing edges)")
 
 # ── adj_CP_citing : citation → citing paper ───────────────────────────────────
 print("Building adj_CP_citing …")
