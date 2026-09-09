@@ -20,12 +20,15 @@ Reads:
 
 SciBERT-encodes "{abstract} [SEP] {title}" (CLS token) in batches.
 Title is appended after the abstract; if a paper has no dcterms:title the
-abstract is encoded alone. Papers with no abstract entry get a zero vector
-and are flagged (title alone is not sufficient to produce a feature).
+abstract is encoded alone. Papers with NO abstract but a usable title are
+encoded from the title alone (flagged in corpus_title_only_fallback.json).
+Only papers with neither abstract nor title get a zero vector
+(flagged in corpus_missing_abstract.json).
 
 Saves:
-  feat_corpus_papers.pt        FloatTensor [N_corpus, 768]
-  corpus_missing_abstract.json list of URIs with no abstract
+  feat_corpus_papers.pt            FloatTensor [N_corpus, 768]
+  corpus_missing_abstract.json     list of URIs with no abstract AND no title (zero vector)
+  corpus_title_only_fallback.json  list of URIs with no abstract, encoded from title alone
 """
 
 import json
@@ -113,7 +116,8 @@ def encode_texts(texts: list[str]) -> torch.Tensor:
     return out.last_hidden_state[:, 0, :].cpu()
 
 feat = torch.zeros(N_corpus, 768, dtype=torch.float)
-missing: list[str] = []
+missing: list[str] = []          # no abstract AND no title → zero vector
+title_only: list[str] = []       # no abstract but title used as fallback
 
 print("Encoding …")
 for batch_start in range(0, N_corpus, BATCH_SIZE):
@@ -123,15 +127,24 @@ for batch_start in range(0, N_corpus, BATCH_SIZE):
 
     for local_i, uri in enumerate(batch_uris):
         abstract_text = abstracts.get(uri, "").strip()
-        if not abstract_text:
+        title_text    = titles.get(uri, "").strip()
+
+        if abstract_text:
+            # Title appended at the end of the abstract, separated by SciBERT's
+            # [SEP] token so the encoder still sees it as a distinct segment
+            # rather than a run-on sentence.
+            text = f"{abstract_text} [SEP] {title_text}" if title_text else abstract_text
+        elif title_text:
+            # No abstract, but a usable title exists — encode the title alone
+            # instead of leaving this paper as an all-zero vector. Flagged
+            # separately (title_only) so it's distinguishable from a fully
+            # featureless paper in the saved diagnostics.
+            text = title_text
+            title_only.append(uri)
+        else:
+            # Neither abstract nor title — nothing to encode, stays zero.
             missing.append(uri)
             continue
-
-        title_text = titles.get(uri, "").strip()
-        # Title appended at the end of the abstract, separated by SciBERT's
-        # [SEP] token so the encoder still sees it as a distinct segment
-        # rather than a run-on sentence.
-        text = f"{abstract_text} [SEP] {title_text}" if title_text else abstract_text
 
         batch_texts.append(text)
         batch_local_idx.append(local_i)
@@ -146,14 +159,23 @@ for batch_start in range(0, N_corpus, BATCH_SIZE):
     print(f"  {done}/{N_corpus}", end="\r")
 
 print()
-print(f"  Missing abstracts: {len(missing)}")
+print(f"  Title-only fallback (no abstract, title used): {len(title_only)}")
+print(f"  Missing abstracts AND missing title (zero vector): {len(missing)}")
 
 # ── Save ──────────────────────────────────────────────────────────────────────
 torch.save(feat, OUT_DIR / "feat_corpus_papers.pt")
+
 with open(OUT_DIR / "corpus_missing_abstract.json", "w") as f:
     f.write('[\n')
     for i, uri in enumerate(missing):
         comma = "," if i < len(missing) - 1 else ""
+        f.write(f'  {json.dumps(uri)}{comma}\n')
+    f.write(']\n')
+
+with open(OUT_DIR / "corpus_title_only_fallback.json", "w") as f:
+    f.write('[\n')
+    for i, uri in enumerate(title_only):
+        comma = "," if i < len(title_only) - 1 else ""
         f.write(f'  {json.dumps(uri)}{comma}\n')
     f.write(']\n')
 
