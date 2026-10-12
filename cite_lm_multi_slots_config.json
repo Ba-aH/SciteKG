@@ -1,0 +1,34 @@
+{
+  "experiment_name": "cite_lm_slots_k4",
+  "gpu": 0,
+  "seed": 42,
+
+  "data_root": "<same data_root as your two-tower config>",
+  "output_dir": "<same output_dir as your two-tower config>",
+  "paper_ckpt": "<output_dir>/exp_PP_MLP_hidden500(run2)/best_model.pt",
+
+  "scibert_model_name": "allenai/scibert_scivocab_uncased",
+  "max_length": "<same max_length as your two-tower config>",
+  "marker_strings": ["[cite]"],
+
+  "batch_size": 64,
+  "epochs": 50,
+  "patience": 8,
+  "temperature": "<same temperature as your two-tower config>",
+  "dropout": 0.1,
+
+  "lr_backbone": 1e-5,
+  "lr_head": 1e-3,
+
+  "lambda_lm": 0.5,
+  "lambda_count": 1.0,
+
+  "max_slots": 4,
+  "count_threshold": 0.5,
+  "dedup_pool": true,
+
+  "monitor_metric": "Recall@10",
+  "test_eval_every": 5,
+
+  "debug_batches": 0
+}
