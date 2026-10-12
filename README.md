@@ -50,7 +50,7 @@ SeHGNN/
 Clone the repository and set up a virtual environment:
 
 ```bash
-git clone https://github.com/Ba-aH/HGNN.git
+git clone https://github.com/Ba-aH/SciteKG.git
 cd SciteKG
 
 python -m venv venv
