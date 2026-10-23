@@ -197,26 +197,32 @@ class PaperTower(nn.Module):
         nn.init.zeros_(self.proj_head.bias)
 
     def forward(self, feat_dict: dict) -> torch.Tensor:
-        # Stack metapath features → [B, M, nfeat]
-        x = torch.stack([feat_dict[k] for k in self.feat_keys], dim=1)
-        x = self.input_drop(x)
+       
+        x = torch.stack([feat_dict[k] for k in self.feat_keys], dim=1) # load the features for each metapath key and stack them along a new dimension (dim=1), resulting in a tensor of shape [B, M, nfeat], where B is the batch size, M is the number of metapaths, and nfeat is the feature dimension (e.g., 768 for SciBERT features).
+        x = self.input_drop(x) # randomly zero some dimensions of the input features to prevent overfitting. This is applied before any projection or transformation, so the model learns to be robust to missing information in the input features.
 
-        if self.residual:
-            x_mean = x.mean(dim=1)   # [B, nfeat]
+        if self.residual: # if residual connections are enabled, compute the mean of the input features across the metapath dimension (dim=1). This results in a tensor of shape [B, nfeat], which will be used later to add a skip connection from the mean of the inputs to the hidden representation after the Transformer and projection layers. This helps preserve information from the original input features and can improve training stability and performance.
+            x_mean = x.mean(dim=1)   # this is done to ensure that the final embedding produced by the PaperTower contains information from both the original input features and the fused representation from the Transformer. This can help improve the quality of the final embedding and make it more robust to variations in the input features.
 
-        # Optional MLP projection → [B, M, hidden] (skipped when use_mlp=False)
+        # 
         if self.use_mlp:
-            x = self.feature_projection(x)
+            x = self.feature_projection(x) # if use_mlp is True, pass the stacked input features through the LinearPerMetapath layers (feature_projection). This projects each metapath's features from nfeat to hidden dimensions, resulting in a tensor of shape [B, M, hidden]. If use_mlp is False, this step is skipped, and the raw input features are passed directly to the Transformer.
 
         # Cross-metapath attention → same shape as input
-        x = self.semantic_fusion(x)
+        x = self.semantic_fusion(x) 
 
         # Flatten + project → [B, hidden]
-        B = x.size(0)
-        x = self.fc_after_concat(x.reshape(B, -1))
+        B = x.size(0) # reuse the batch size for reshaping the tensor before passing it through the fully connected layer (fc_after_concat). This ensures that the output tensor has the correct shape [B, hidden] for further processing.
+        
+        x = x.reshape(B, -1) # flatten the tensor from [B, M, hidden] to [B, M * hidden] so that it can be passed through the fully connected layer (fc_after_concat) to project it into a single hidden-dim vector. This step combines the information from all metapaths into a single representation for each sample in the batch.
+                             # this is where the metapath feature are concatenated into a single vector after the transformer has fused the information across metapaths. The resulting vector is then projected into a hidden dimension for further processing.
 
-        if self.residual:
-            x = x + self.res_fc(x_mean)
+        x = self.fc_after_concat(x) # the concatenated metapath feature vector is projected into a hidden dimension (parametarable hidden) 
+                                    # this is done to match match the hidden dimension with the projection head to compare the produced paper tower embedding with the context tower embedding. 
+                                    # The hidden dimension is a hyperparameter that can be tuned for optimal performance.
+        
+        if self.residual: # if residual connections are enabled, add a skip connection from the mean of the input features (x_mean) to the hidden representation (x) after the Transformer and projection layers. This helps preserve information from the original input features and can improve training stability and performance. The skip connection is implemented by passing x_mean through a linear layer (res_fc) to match the hidden dimension, and then adding it to x.
+            x = x + self.res_fc(x_mean) # this is done to ensure that the final embedding produced by the PaperTower contains information from both the original input features and the fused representation from the Transformer. This can help improve the quality of the final embedding and make it more robust to variations in the input features.
 
         # Project → [B, embed_dim] and L2 normalise
         return F.normalize(self.proj_head(x), p=2, dim=-1)

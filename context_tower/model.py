@@ -88,12 +88,12 @@ class ContextTower(nn.Module):
 
         # Take only the [CLS] token (position 0) as the sentence-level embedding → [B, 768]
         # [CLS] is a special token prepended to every input, trained to summarize the whole sequence
-        cls_emb = outputs.last_hidden_state[:, 0, :]
+        cls_emb = outputs.last_hidden_state[:, 0, :] # Here we take the [CLS] token's embedding from the last hidden state of the model.
 
         # Project into shared embedding space so both towers output the same dimension
         x = self.dropout(cls_emb)  # randomly zero some dimensions to prevent overfitting
-        x = self.proj(x)           # Linear(768 → embed_dim)
-        x = self.norm(x)           # LayerNorm stabilises activations before normalisation
+        x = self.proj(x)           # PASS THE CLS EMBEDDING THROUGH A LINEAR LAYER TO CHANGE ITS DIMENSION FROM 768 TO embed_dim if needed
+        x = self.norm(x)           # normalize the projected embedding to have zero mean and unit variance across the batch, which can help with training stability.
 
         # L2 normalise → place embedding on unit sphere so dot product = cosine similarity
         return F.normalize(x, p=2, dim=-1)
