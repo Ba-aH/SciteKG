@@ -1,0 +1,23 @@
+{
+  "experiment_name": "cite_lm_align_lm",
+  "gpu": 0,
+  "seed": 42,
+
+  "data_root": "~/HGNN/shared/data_prep",
+  "output_dir": "~/HGNN/configs/lm_trained_model",
+  "paper_ckpt": "~/HGNN/configs/acl200/P+PCCon/exp_PP_MLP_(P+PCCon)/best_model.pt",
+
+  "scibert_model_name": "allenai/scibert_scivocab_uncased",
+  "max_length": 256,
+  "marker_strings": ["( [cit] )"],
+
+  "batch_size": 128,
+  "epochs": 50,
+  "patience": 8,
+  "temperature": 0.07,
+  "dropout": 0.1,
+  "test_eval_every": 5,
+  "lr_backbone": 1e-5,
+  "lr_head": 1e-3,
+  "lambda_lm": 0.5
+}

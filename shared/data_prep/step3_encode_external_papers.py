@@ -2,7 +2,7 @@
 step3_encode_external_papers.py
 ────────────────────────────────
 Reads:
-  merged.ttl         (for citekg:hasCitationContext → c4o:hasContext)
+  merged.ttl         (for citekg:hasCitationContext → c4o:hasContext, and dcterms:title for the fallback)
   node_index.json
   external_ids.pt
   paper_uris.json
@@ -17,12 +17,15 @@ For each external paper:
     never be built from — or contaminated by — val/test citation contexts.
     This mirrors the guard already applied in step5a_encode_citations.py.
   - If ≥1 train context: feature = mean SciBERT(CLS) over those passages
-  - If 0 train contexts (Category C): feature = zeros(768)
+  - If 0 train contexts (Category C): feature = SciBERT(CLS) of the paper's dcterms:title.
+    A title is known for every paper and carries no val/test information, so this is not a
+    leakage risk. Only a paper with neither a train context nor a title stays a zero vector.
 
 Saves:
   feat_external_papers.pt      FloatTensor [N_external, 768]
-  external_has_feature.pt      BoolTensor  [N_external]  (False = zero-padded)
+  external_has_feature.pt      BoolTensor  [N_external]  (True = built from ≥1 train context; False = title fallback, or zero if no title)
   external_context_counts.json {uri: n_contexts}  — useful for diagnostics
+  external_title_fallback.json URIs of Category C papers encoded from their title alone
 """
 
 import json
@@ -34,6 +37,7 @@ from transformers import AutoTokenizer, AutoModel
 
 CITEKG = Namespace("https://citekg.org/ontology/")
 C4O    = Namespace("http://purl.org/spar/c4o/")
+DCTERMS = Namespace("http://purl.org/dc/terms/")
 
 OUT_DIR    = Path(".")
 MODEL_NAME = "allenai/scibert_scivocab_uncased"
@@ -147,7 +151,7 @@ has_feature = torch.zeros(N_external, dtype=torch.bool)
 for ext_idx, uri in enumerate(external_uris):
     passages = ext_contexts[uri]
     if not passages:
-        # Category C — zero vector, flag stays False
+        # Category C — handled by the title fallback below, flag stays False
         continue
 
     # Encode in sub-batches (a paper can have many contexts)
@@ -165,6 +169,30 @@ for ext_idx, uri in enumerate(external_uris):
 
 print(f"\n  Encoded {has_feature.sum().item()} / {N_external} external papers")
 
+# ── Fallback for Category C: encode the paper's title ─────────────────────────
+# A paper with 0 train contexts has no content from the context side. Its own title is always
+# available (it is not a val/test citation context), so it is encoded the same way as everything
+# else (SciBERT CLS) and written into the same feat_P row. has_feature stays False for these papers.
+title_only: list[str] = []      # Category C papers encoded from their title
+no_title:   list[str] = []      # Category C papers with no title either (stay zero)
+fallback_idx, fallback_texts = [], []
+for ext_idx, uri in enumerate(external_uris):
+    if has_feature[ext_idx]:
+        continue
+    title = g.value(URIRef(uri), DCTERMS.title)
+    title = str(title).strip() if title is not None else ""
+    if title:
+        fallback_idx.append(ext_idx)
+        fallback_texts.append(title)
+        title_only.append(uri)
+    else:
+        no_title.append(uri)
+
+for b_start in range(0, len(fallback_texts), BATCH_SIZE):
+    feat[fallback_idx[b_start : b_start + BATCH_SIZE]] = encode_texts(fallback_texts[b_start : b_start + BATCH_SIZE])
+print(f"  Title fallback (0 train contexts, title used): {len(title_only)}")
+print(f"  Still zero (0 train contexts AND no title)   : {len(no_title)}")
+
 # ── Save ──────────────────────────────────────────────────────────────────────
 torch.save(feat,        OUT_DIR / "feat_external_papers.pt")
 torch.save(has_feature, OUT_DIR / "external_has_feature.pt")
@@ -175,6 +203,13 @@ with open(OUT_DIR / "external_context_counts.json", "w") as f:
         comma = "," if i < len(items) - 1 else ""
         f.write(f'  {json.dumps(uri)}: {count}{comma}\n')
     f.write('}\n')
+
+with open(OUT_DIR / "external_title_fallback.json", "w") as f:
+    f.write('[\n')
+    for i, uri in enumerate(title_only):
+        comma = "," if i < len(title_only) - 1 else ""
+        f.write(f'  {json.dumps(uri)}{comma}\n')
+    f.write(']\n')
 
 print(f"Saved feat_external_papers.pt  shape={tuple(feat.shape)}")
 print(f"Saved external_has_feature.pt  True={has_feature.sum().item()}")
